@@ -1,0 +1,6 @@
+{
+  "name": "EDUSMART — School Management SaaS",
+  "description": "Multi-tenant School Management SaaS platform for private schools, colleges, and educational institutions across Africa and globally.",
+  "requestFramePermissions": ["microphone", "camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
