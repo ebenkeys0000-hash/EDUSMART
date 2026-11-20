@@ -70,6 +70,8 @@ interface AuthContextValue {
   setLang: (lang: Lang) => void;
   verificationCodePreview: string | null;
   setVerificationCodePreview: (code: string | null) => void;
+  authError: string | null;
+  clearAuthError: () => void;
   loginWithEmail: (email: string, password: string) => Promise<void>;
   registerWithEmail: (payload: Record<string, unknown>) => Promise<void>;
   loginWithGoogle: () => Promise<void>;
@@ -78,6 +80,50 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+
+function formatFirebaseAuthError(err: any, currentLang: Lang): Error {
+  const code = String(err?.code || '');
+  if (code === 'auth/unauthorized-domain') {
+    const host = typeof window !== 'undefined' ? window.location.hostname : '';
+    return new Error(
+      currentLang === 'fr'
+        ? `Domaine non autorisé dans Firebase (${host}). Ajoutez-le dans Firebase Console → Authentication → Settings → Authorized domains.`
+        : `Unauthorized Firebase domain (${host}). Add it in Firebase Console → Authentication → Settings → Authorized domains.`
+    );
+  }
+  if (code === 'auth/operation-not-allowed') {
+    return new Error(
+      currentLang === 'fr'
+        ? 'La connexion Google n’est pas activée dans Firebase Console (Authentication → Sign-in method → Google).'
+        : 'Google sign-in provider is not enabled in Firebase Console (Authentication → Sign-in method → Google).'
+    );
+  }
+  if (code === 'auth/network-request-failed') {
+    return new Error(
+      currentLang === 'fr'
+        ? 'Erreur réseau lors de la communication avec Firebase Authentication. Vérifiez votre connexion.'
+        : 'Network error communicating with Firebase Authentication. Please check your connection.'
+    );
+  }
+  if (code === 'auth/account-exists-with-different-credential') {
+    return new Error(
+      currentLang === 'fr'
+        ? 'Un compte existe déjà avec cette adresse e-mail via un autre fournisseur de connexion.'
+        : 'An account already exists with this email using a different sign-in provider.'
+    );
+  }
+  if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+    return new Error(
+      currentLang === 'fr'
+        ? 'Fenêtre Google fermée avant la fin de la connexion.'
+        : 'Google sign-in popup was closed before completing.'
+    );
+  }
+  if (err instanceof Error) {
+    return err;
+  }
+  return new Error(String(err || 'Google authentication failed.'));
+}
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<UserProfile | null>(null);
@@ -93,7 +139,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return 'fr';
   });
   const [verificationCodePreview, setVerificationCodePreview] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
   const googleSyncPromiseRef = useRef<Promise<void> | null>(null);
+  const langRef = useRef<Lang>(lang);
+  langRef.current = lang;
+
+  const clearAuthError = useCallback(() => setAuthError(null), []);
 
   const setLang = useCallback(
     (next: Lang) => {
@@ -134,21 +185,54 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return googleSyncPromiseRef.current;
     }
 
-    const run = (async () => {
-      setMemoryAuthToken(null);
-      const res = await fetch('/api/auth/google', {
+    const postSync = async (tokenToSend: string) => {
+      return fetch('/api/auth/google', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
+          Authorization: `Bearer ${tokenToSend}`,
         },
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data?.error || 'Google authentication synchronization failed.');
+    };
+
+    const run = (async () => {
+      setMemoryAuthToken(null);
+      setAuthError(null);
+
+      let res = await postSync(idToken);
+      if (res.status === 401 && auth.currentUser) {
+        const refreshedToken = await auth.currentUser.getIdToken(true);
+        if (refreshedToken && refreshedToken !== idToken) {
+          res = await postSync(refreshedToken);
+        }
       }
+
+      const rawText = await res.text();
+      let data: any = {};
+      if (rawText) {
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          data = {};
+        }
+      }
+
+      if (!res.ok) {
+        const serverDetail =
+          data?.error ||
+          (rawText ? `${rawText.replace(/<[^>]+>/g, ' ').trim().slice(0, 180)}` : '');
+        const message = serverDetail
+          ? serverDetail
+          : `Google authentication synchronization failed (HTTP ${res.status}).`;
+        throw new Error(message);
+      }
+
+      if (!data?.user) {
+        throw new Error('Google synchronization succeeded but returned no user profile.');
+      }
+
       setUser(data.user);
-      setSchool(data.school);
+      setSchool(data.school ?? null);
       if (data.user?.preferredLang === 'en' || data.user?.preferredLang === 'fr') {
         setLangState(data.user.preferredLang);
       }
@@ -171,8 +255,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     let cancelled = false;
 
-    // Process any pending OAuth redirect return first
-    getRedirectResult(auth)
+    const redirectPromise = getRedirectResult(auth)
       .then(async (result) => {
         if (!cancelled && result?.user) {
           const token = await result.user.getIdToken();
@@ -181,22 +264,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       })
       .catch((err) => {
         console.error('Firebase redirect sign-in error:', err);
+        if (!cancelled) {
+          setAuthError(formatFirebaseAuthError(err, langRef.current).message);
+        }
       });
 
     const unsub = onAuthStateChanged(auth, async (fbUser) => {
       try {
+        await redirectPromise;
         if (fbUser) {
           const token = await fbUser.getIdToken();
           await syncFirebaseUserWithBackend(token);
         } else {
-          // Restore persisted email/password session if present
           const existingLocalToken = await getActiveAuthToken();
           if (existingLocalToken) {
             await refreshSession();
           }
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('Session initialization sync error:', err);
+        if (!cancelled && fbUser) {
+          setAuthError(formatFirebaseAuthError(err, langRef.current).message);
+        }
       } finally {
         if (!cancelled) {
           setLoading(false);
@@ -211,13 +300,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [refreshSession, syncFirebaseUserWithBackend]);
 
   const loginWithEmail = async (email: string, password: string) => {
+    setAuthError(null);
+    if (auth.currentUser) {
+      await signOut(auth).catch(() => {});
+    }
     const data = await apiRequest<{
       token: string;
       user: UserProfile;
       school: SchoolProfile | null;
     }>('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email: email.trim(), password }),
     });
     setMemoryAuthToken(data.token);
     setUser(data.user);
@@ -228,6 +321,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const registerWithEmail = async (payload: Record<string, unknown>) => {
+    setAuthError(null);
+    if (auth.currentUser) {
+      await signOut(auth).catch(() => {});
+    }
     const data = await apiRequest<{
       token: string;
       user: UserProfile;
@@ -246,9 +343,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const loginWithGoogle = async () => {
+    setAuthError(null);
     try {
       const cred = await signInWithPopup(auth, googleAuthProvider);
-      const idToken = await cred.user.getIdToken();
+      const idToken = await cred.user.getIdToken(true);
       await syncFirebaseUserWithBackend(idToken);
     } catch (err: any) {
       const code = String(err?.code || '');
@@ -256,26 +354,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await signInWithRedirect(auth, googleAuthProvider);
         return;
       }
-      if (code === 'auth/unauthorized-domain') {
-        const host = typeof window !== 'undefined' ? window.location.hostname : '';
-        throw new Error(
-          lang === 'fr'
-            ? `Domaine non autorisé dans Firebase (${host}). Ajoutez-le dans Firebase Console → Authentication → Settings → Authorized domains.`
-            : `Unauthorized Firebase domain (${host}). Add it in Firebase Console → Authentication → Settings → Authorized domains.`
-        );
-      }
-      if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
-        throw new Error(
-          lang === 'fr'
-            ? 'Fenêtre Google fermée avant la fin de la connexion.'
-            : 'Google sign-in popup was closed before completing.'
-        );
-      }
-      throw err;
+      throw formatFirebaseAuthError(err, lang);
     }
   };
 
   const logout = async () => {
+    setAuthError(null);
     setMemoryAuthToken(null);
     setUser(null);
     setSchool(null);
@@ -296,6 +380,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setLang,
         verificationCodePreview,
         setVerificationCodePreview,
+        authError,
+        clearAuthError,
         loginWithEmail,
         registerWithEmail,
         loginWithGoogle,

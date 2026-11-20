@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export interface ServerFirebaseConfig {
   projectId: string;
@@ -22,8 +23,10 @@ let cachedConfig: ServerFirebaseConfig | null = null;
 export function getServerFirebaseConfig(): ServerFirebaseConfig {
   if (cachedConfig) return cachedConfig;
 
+  const currentDir = path.dirname(fileURLToPath(import.meta.url));
   let fileJson: Partial<ServerFirebaseConfig> = {};
   const candidates = [
+    path.resolve(currentDir, '../../firebase-applet-config.json'),
     path.resolve(process.cwd(), 'firebase-applet-config.json'),
     path.resolve(process.cwd(), '..', 'firebase-applet-config.json'),
   ];

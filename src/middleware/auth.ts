@@ -16,34 +16,45 @@ export interface AuthRequest extends Request {
   school?: DbSchool | null;
 }
 
-async function upsertFirebaseUser(
+export async function upsertFirebaseUser(
   uid: string,
   email: string,
   name?: string,
   picture?: string
 ): Promise<DbUser> {
-  const cleanEmail = email.trim().toLowerCase();
+  if (!uid || !uid.trim()) {
+    throw new Error('Firebase token is missing a valid user UID.');
+  }
+
+  const cleanUid = uid.trim();
+  const cleanEmail = (email || `${cleanUid}@firebase.local`).trim().toLowerCase();
 
   const existing = await db
     .select()
     .from(users)
-    .where(or(eq(users.uid, uid), eq(users.email, cleanEmail)))
-    .limit(1);
+    .where(or(eq(users.uid, cleanUid), eq(users.email, cleanEmail)))
+    .limit(2);
 
   if (existing.length > 0) {
-    const current = existing[0];
-    if (current.uid !== uid || !current.emailVerified || (!current.avatarUrl && picture)) {
-      const updated = await db
+    // Prefer an exact UID match first; otherwise link the matching email account
+    const current = existing.find((row) => row.uid === cleanUid) || existing[0];
+    const needsUidUpdate = current.uid !== cleanUid;
+    const needsVerified = !current.emailVerified;
+    const needsAvatar = !current.avatarUrl && Boolean(picture);
+    const needsName = !current.fullName && Boolean(name);
+
+    if (needsUidUpdate || needsVerified || needsAvatar || needsName) {
+      const [updated] = await db
         .update(users)
         .set({
-          uid,
+          uid: cleanUid,
           emailVerified: true,
           avatarUrl: current.avatarUrl || picture || '',
           fullName: current.fullName || name || cleanEmail.split('@')[0],
         })
         .where(eq(users.id, current.id))
         .returning();
-      return updated[0];
+      return updated;
     }
     return current;
   }
@@ -52,7 +63,7 @@ async function upsertFirebaseUser(
   await db
     .insert(users)
     .values({
-      uid,
+      uid: cleanUid,
       email: cleanEmail,
       fullName: name || cleanEmail.split('@')[0],
       avatarUrl: picture || '',
@@ -65,7 +76,7 @@ async function upsertFirebaseUser(
   const resolved = await db
     .select()
     .from(users)
-    .where(or(eq(users.uid, uid), eq(users.email, cleanEmail)))
+    .where(or(eq(users.uid, cleanUid), eq(users.email, cleanEmail)))
     .limit(1);
 
   if (resolved.length === 0) {
@@ -73,11 +84,11 @@ async function upsertFirebaseUser(
   }
 
   const row = resolved[0];
-  if (row.uid !== uid || !row.emailVerified) {
+  if (row.uid !== cleanUid || !row.emailVerified) {
     const [updated] = await db
       .update(users)
       .set({
-        uid,
+        uid: cleanUid,
         emailVerified: true,
         avatarUrl: row.avatarUrl || picture || '',
         fullName: row.fullName || name || cleanEmail.split('@')[0],
@@ -98,20 +109,50 @@ export const requireAuth = async (req: AuthRequest, res: Response, next: NextFun
 
   const token = authHeader.split('Bearer ')[1]?.trim();
   if (!token) {
-    return res.status(401).json({ error: 'Unauthorized: Empty token' });
+    return res.status(401).json({ error: 'Unauthorized: Empty authentication token' });
   }
 
+  // Phase 1: Ensure database schema is ready
   try {
     await ensureDatabaseSchema();
+  } catch (dbInitError: any) {
+    console.error('Database initialization failed during authentication:', dbInitError);
+    return res.status(503).json({
+      error: `Database unavailable during authentication: ${dbInitError?.message || 'Connection error'}`,
+    });
+  }
+
+  // Phase 2: Verify local app token OR Firebase ID token (only cryptographic/token errors return 401)
+  const appPayload = verifyAppToken(token);
+  let firebaseIdentity: Awaited<ReturnType<typeof verifyFirebaseIdToken>> | null = null;
+
+  if (!appPayload) {
+    try {
+      firebaseIdentity = await verifyFirebaseIdToken(token);
+    } catch (tokenError: any) {
+      const code = tokenError?.code ? ` (${tokenError.code})` : '';
+      const detail = tokenError?.message || 'Invalid or expired Firebase ID token';
+      console.error('Firebase token verification failed:', code, detail);
+      return res.status(401).json({
+        error: `Unauthorized: Token verification failed${code}: ${detail}`,
+      });
+    }
+  }
+
+  // Phase 3: Synchronize authenticated identity with PostgreSQL user & school tenant
+  try {
     let dbUser: DbUser | undefined;
 
-    const appPayload = verifyAppToken(token);
     if (appPayload) {
       const found = await db.select().from(users).where(eq(users.id, appPayload.userId)).limit(1);
       dbUser = found[0];
-    } else {
-      const decoded = await verifyFirebaseIdToken(token);
-      dbUser = await upsertFirebaseUser(decoded.uid, decoded.email, decoded.name, decoded.picture);
+    } else if (firebaseIdentity) {
+      dbUser = await upsertFirebaseUser(
+        firebaseIdentity.uid,
+        firebaseIdentity.email,
+        firebaseIdentity.name,
+        firebaseIdentity.picture
+      );
     }
 
     if (!dbUser) {
@@ -143,9 +184,11 @@ export const requireAuth = async (req: AuthRequest, res: Response, next: NextFun
     req.dbUser = dbUser;
     req.school = school;
     next();
-  } catch (error) {
-    console.error('Authentication verification failed:', error);
-    return res.status(401).json({ error: 'Unauthorized: Invalid or expired token' });
+  } catch (syncError: any) {
+    console.error('Authentication database synchronization failed:', syncError);
+    return res.status(500).json({
+      error: `Account synchronization failed: ${syncError?.message || 'Internal database error'}`,
+    });
   }
 };
 
