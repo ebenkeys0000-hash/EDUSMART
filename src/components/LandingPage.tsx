@@ -924,11 +924,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onOpenAuth }) => {
                 <div className="space-y-3 border-t border-slate-200 dark:border-slate-800 pt-5 text-sm text-slate-700 dark:text-slate-300">
                   <div className="flex items-center gap-3">
                     <Mail className="h-4 w-4 text-[#1E40AF] dark:text-blue-400 shrink-0" />
-                    <span>contact@edusmart-africa.com</span>
+                    <span>ebenkeys0000@gmail.com</span>
                   </div>
                   <div className="flex items-center gap-3">
                     <Phone className="h-4 w-4 text-[#1E40AF] dark:text-blue-400 shrink-0" />
-                    <span className="font-mono-tabular">+229 01 97 00 00 00 · +228 90 00 00 00</span>
+                    <span className="font-mono-tabular">
+                      +2290195441602 ({lang === 'fr' ? 'Téléphone & WhatsApp' : 'Phone & WhatsApp'})
+                    </span>
                   </div>
                   <div className="flex items-center gap-3">
                     <MapPin className="h-4 w-4 text-[#1E40AF] dark:text-blue-400 shrink-0" />
