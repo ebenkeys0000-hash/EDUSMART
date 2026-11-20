@@ -1,10 +1,11 @@
 import crypto from 'node:crypto';
-import firebaseConfig from '../../firebase-applet-config.json';
+import { getServerFirebaseConfig } from './firebase-config-server.ts';
 
 const getSigningSecret = (): string => {
   if (process.env.AUTH_SESSION_SECRET && process.env.AUTH_SESSION_SECRET.length >= 16) {
     return process.env.AUTH_SESSION_SECRET;
   }
+  const firebaseConfig = getServerFirebaseConfig();
   return crypto
     .createHash('sha256')
     .update(`edusmart:${firebaseConfig.projectId}:${firebaseConfig.appId}`)

@@ -38,6 +38,7 @@ import { useTheme } from '../context/ThemeContext.tsx';
 import { translations } from '../lib/i18n.ts';
 import { apiRequest } from '../lib/api.ts';
 import { BrandLogo } from './ui/BrandLogo.tsx';
+import { TrialCountdown } from './ui/TrialCountdown.tsx';
 import { DashboardView } from './modules/DashboardView.tsx';
 import { StudentsModule } from './modules/StudentsModule.tsx';
 import { TeachersModule } from './modules/TeachersModule.tsx';
@@ -648,6 +649,14 @@ export const AppShell: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+            {school && (user?.role === 'school_admin' || user?.role === 'super_admin') && (
+              <TrialCountdown
+                subscriptionState={subscriptionState}
+                lang={lang}
+                onClick={() => setActiveTab('subscription')}
+              />
+            )}
+
             {/* Quick Search */}
             <div ref={searchRef} className="relative hidden md:block w-56 lg:w-64">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />

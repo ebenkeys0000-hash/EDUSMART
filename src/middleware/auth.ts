@@ -1,8 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
-import { eq } from 'drizzle-orm';
-import { adminAuth } from '../lib/firebase-admin.ts';
+import { eq, or } from 'drizzle-orm';
+import { verifyFirebaseIdToken } from '../lib/firebase-admin.ts';
 import { verifyAppToken } from '../lib/auth-crypto.ts';
 import { db } from '../db/index.ts';
+import { ensureDatabaseSchema } from '../db/bootstrapSchema.ts';
 import { schools, users } from '../db/schema.ts';
 import { computeTrialAndSubscriptionState } from '../lib/subscriptionCatalog.ts';
 import { syncSchoolSubscriptionStatus } from '../server/subscriptionService.ts';
@@ -15,18 +16,30 @@ export interface AuthRequest extends Request {
   school?: DbSchool | null;
 }
 
-async function upsertFirebaseUser(uid: string, email: string, name?: string, picture?: string): Promise<DbUser> {
-  const existingByEmail = await db.select().from(users).where(eq(users.email, email)).limit(1);
-  if (existingByEmail.length > 0) {
-    const current = existingByEmail[0];
-    if (current.uid !== uid || !current.emailVerified) {
+async function upsertFirebaseUser(
+  uid: string,
+  email: string,
+  name?: string,
+  picture?: string
+): Promise<DbUser> {
+  const cleanEmail = email.trim().toLowerCase();
+
+  const existing = await db
+    .select()
+    .from(users)
+    .where(or(eq(users.uid, uid), eq(users.email, cleanEmail)))
+    .limit(1);
+
+  if (existing.length > 0) {
+    const current = existing[0];
+    if (current.uid !== uid || !current.emailVerified || (!current.avatarUrl && picture)) {
       const updated = await db
         .update(users)
         .set({
           uid,
           emailVerified: true,
           avatarUrl: current.avatarUrl || picture || '',
-          fullName: current.fullName || name || email.split('@')[0],
+          fullName: current.fullName || name || cleanEmail.split('@')[0],
         })
         .where(eq(users.id, current.id))
         .returning();
@@ -35,27 +48,46 @@ async function upsertFirebaseUser(uid: string, email: string, name?: string, pic
     return current;
   }
 
-  const inserted = await db
+  // Race-safe insert when concurrent Firebase auth requests arrive for a first-time Google user
+  await db
     .insert(users)
     .values({
       uid,
-      email,
-      fullName: name || email.split('@')[0],
+      email: cleanEmail,
+      fullName: name || cleanEmail.split('@')[0],
       avatarUrl: picture || '',
       role: 'school_admin',
       status: 'active',
       emailVerified: true,
     })
-    .onConflictDoUpdate({
-      target: users.uid,
-      set: {
-        email,
-        emailVerified: true,
-      },
-    })
-    .returning();
+    .onConflictDoNothing();
 
-  return inserted[0];
+  const resolved = await db
+    .select()
+    .from(users)
+    .where(or(eq(users.uid, uid), eq(users.email, cleanEmail)))
+    .limit(1);
+
+  if (resolved.length === 0) {
+    throw new Error('Failed to resolve authenticated Firebase account in database.');
+  }
+
+  const row = resolved[0];
+  if (row.uid !== uid || !row.emailVerified) {
+    const [updated] = await db
+      .update(users)
+      .set({
+        uid,
+        emailVerified: true,
+        avatarUrl: row.avatarUrl || picture || '',
+        fullName: row.fullName || name || cleanEmail.split('@')[0],
+      })
+      .where(eq(users.id, row.id))
+      .returning();
+    return updated;
+  }
+
+  return row;
 }
 
 export const requireAuth = async (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -70,6 +102,7 @@ export const requireAuth = async (req: AuthRequest, res: Response, next: NextFun
   }
 
   try {
+    await ensureDatabaseSchema();
     let dbUser: DbUser | undefined;
 
     const appPayload = verifyAppToken(token);
@@ -77,9 +110,8 @@ export const requireAuth = async (req: AuthRequest, res: Response, next: NextFun
       const found = await db.select().from(users).where(eq(users.id, appPayload.userId)).limit(1);
       dbUser = found[0];
     } else {
-      const decoded = await adminAuth.verifyIdToken(token);
-      const email = decoded.email || `${decoded.uid}@firebase.local`;
-      dbUser = await upsertFirebaseUser(decoded.uid, email, decoded.name, decoded.picture);
+      const decoded = await verifyFirebaseIdToken(token);
+      dbUser = await upsertFirebaseUser(decoded.uid, decoded.email, decoded.name, decoded.picture);
     }
 
     if (!dbUser) {
