@@ -84,9 +84,26 @@ export async function apiRequest<T = any>(
     setMemoryAuthToken(null);
   }
 
-  const data = await res.json().catch(() => ({}));
+  const rawText = await res.text();
+  let data: any = {};
+  if (rawText) {
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      data = {};
+    }
+  }
+
   if (!res.ok) {
-    throw new ApiError(data?.error || `Request failed (${res.status})`, res.status);
+    const cleanText = rawText ? rawText.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : '';
+    const message =
+      data?.error ||
+      (res.status === 404 && !data?.error
+        ? `API route not found (404) for ${path}. ${cleanText ? cleanText.slice(0, 120) : ''}`.trim()
+        : cleanText
+        ? cleanText.slice(0, 180)
+        : `Request failed (${res.status})`);
+    throw new ApiError(message, res.status);
   }
   return data as T;
 }

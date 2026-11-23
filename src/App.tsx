@@ -20,7 +20,7 @@ function getInitialVerifyCode(): string | null {
 }
 
 const RootRouter: React.FC = () => {
-  const { user, school, loading } = useAuth();
+  const { user, school, loading, authError } = useAuth();
   const [authModalState, setAuthModalState] = useState<{
     mode: 'login' | 'register';
     planKey?: SubscriptionPlanKey;
@@ -33,6 +33,12 @@ const RootRouter: React.FC = () => {
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
+
+  useEffect(() => {
+    if (!loading && !user && authError && !authModalState) {
+      setAuthModalState({ mode: 'login' });
+    }
+  }, [loading, user, authError, authModalState]);
 
   if (verifyCode) {
     return (

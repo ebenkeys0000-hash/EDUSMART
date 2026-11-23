@@ -13,6 +13,7 @@ const router = Router();
 
 // Register School + School Admin OR Register user into existing School via schoolCode
 router.post('/register', async (req, res) => {
+  let newlyCreatedSchoolId: number | null = null;
   try {
     const {
       mode = 'create_school', // 'create_school' | 'join_school'
@@ -32,10 +33,12 @@ router.post('/register', async (req, res) => {
       billingCycle = 'monthly',
     } = req.body || {};
 
-    if (!fullName || !email || !password) {
+    const trimmedFullName = String(fullName || '').trim();
+    const cleanEmail = String(email || '').trim().toLowerCase();
+
+    if (!trimmedFullName || !cleanEmail || !password || !String(password).trim()) {
       return res.status(400).json({ error: 'Full name, email, and password are required.' });
     }
-    const cleanEmail = String(email).trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
       return res.status(400).json({ error: 'Invalid email address format.' });
     }
@@ -56,11 +59,11 @@ router.post('/register', async (req, res) => {
     let assignedRole = 'school_admin';
 
     if (mode === 'create_school') {
-      if (!schoolName || String(schoolName).trim().length < 2) {
+      const trimmedSchoolName = String(schoolName || '').trim();
+      if (trimmedSchoolName.length < 2) {
         return res.status(400).json({ error: 'School name is required to create an institution.' });
       }
-      const slugBase = String(schoolName)
-        .trim()
+      const slugBase = trimmedSchoolName
         .toUpperCase()
         .replace(/[^A-Z0-9]/g, '')
         .slice(0, 6);
@@ -70,14 +73,14 @@ router.post('/register', async (req, res) => {
       const [createdSchool] = await db
         .insert(schools)
         .values({
-          name: String(schoolName).trim(),
+          name: trimmedSchoolName,
           code: uniqueCode,
-          country: String(country || 'Bénin'),
-          city: String(city || 'Cotonou'),
+          country: String(country || 'Bénin').trim() || 'Bénin',
+          city: String(city || 'Cotonou').trim() || 'Cotonou',
           email: cleanEmail,
-          phone: String(phone || ''),
-          currency: String(currency || 'XOF'),
-          academicSystem: String(academicSystem || 'Francophone'),
+          phone: String(phone || '').trim(),
+          currency: String(currency || 'XOF').trim() || 'XOF',
+          academicSystem: String(academicSystem || 'Francophone').trim() || 'Francophone',
           subscriptionPlan: normalizePlanKey(String(subscriptionPlan || 'multi_niveaux')),
           billingCycle: billingCycle === 'annual' ? 'annual' : 'monthly',
           subscriptionStatus: trialWindow.subscriptionStatus,
@@ -89,9 +92,10 @@ router.post('/register', async (req, res) => {
         })
         .returning();
 
+      newlyCreatedSchoolId = createdSchool.id;
       assignedSchool = createdSchool;
       assignedRole = 'school_admin';
-      await bootstrapSchoolDefaults(createdSchool.id, String(fullName).trim());
+      await bootstrapSchoolDefaults(createdSchool.id, trimmedFullName);
     } else {
       if (!schoolCode) {
         return res.status(400).json({ error: 'School code is required to join an existing school.' });
@@ -116,8 +120,8 @@ router.post('/register', async (req, res) => {
         schoolId: assignedSchool.id,
         email: cleanEmail,
         passwordHash,
-        fullName: String(fullName).trim(),
-        phone: String(phone || ''),
+        fullName: trimmedFullName,
+        phone: String(phone || '').trim(),
         role: assignedRole,
         status: 'active',
         emailVerified: false,
@@ -125,6 +129,8 @@ router.post('/register', async (req, res) => {
         preferredLang: preferredLang === 'en' ? 'en' : 'fr',
       })
       .returning();
+
+    newlyCreatedSchoolId = null;
 
     await logActivity(
       assignedSchool.id,
@@ -147,6 +153,12 @@ router.post('/register', async (req, res) => {
       verificationCodePreview: verificationToken,
     });
   } catch (error) {
+    if (newlyCreatedSchoolId !== null) {
+      await db
+        .delete(schools)
+        .where(eq(schools.id, newlyCreatedSchoolId))
+        .catch((cleanupErr) => console.error('School rollback failed:', cleanupErr));
+    }
     console.error('Register error:', error);
     res.status(500).json({ error: 'Failed to register account. Please try again.' });
   }

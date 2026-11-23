@@ -50,6 +50,11 @@ router.post('/setup', requireAuth, async (req: AuthRequest, res) => {
     } = req.body || {};
 
     if (mode === 'join' && schoolCode) {
+      if (req.dbUser.schoolId) {
+        return res.status(409).json({
+          error: 'This account is already attached to a school workspace.',
+        });
+      }
       const found = await db
         .select()
         .from(schools)
@@ -58,9 +63,10 @@ router.post('/setup', requireAuth, async (req: AuthRequest, res) => {
       if (found.length === 0) {
         return res.status(404).json({ error: 'Invalid institution code.' });
       }
+      const nextRole = req.dbUser.role === 'super_admin' ? 'super_admin' : 'teacher';
       const [updatedUser] = await db
         .update(users)
-        .set({ schoolId: found[0].id, role: 'teacher' })
+        .set({ schoolId: found[0].id, role: nextRole })
         .where(eq(users.id, req.dbUser.id))
         .returning();
 

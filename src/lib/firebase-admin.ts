@@ -1,34 +1,40 @@
-import { initializeApp, getApps, cert } from 'firebase-admin/app';
+import { initializeApp, getApp, getApps, cert } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getServerFirebaseConfig } from './firebase-config-server.ts';
 
 const firebaseConfig = getServerFirebaseConfig();
 
-function initAdminApp() {
-  if (getApps().length > 0) return;
+function getOrInitAdminApp() {
+  if (getApps().length > 0) {
+    return getApp();
+  }
 
   const serviceAccountRaw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
   if (serviceAccountRaw) {
     try {
       const parsed = JSON.parse(serviceAccountRaw);
-      initializeApp({
+      return initializeApp({
         credential: cert(parsed),
         projectId: parsed.project_id || firebaseConfig.projectId,
       });
-      return;
     } catch (err) {
       console.warn('Invalid FIREBASE_SERVICE_ACCOUNT_JSON provided; falling back to projectId init:', err);
     }
   }
 
-  initializeApp({
+  if (!firebaseConfig.projectId) {
+    throw new Error(
+      'Firebase server configuration is missing projectId. Ensure firebase-applet-config.json or FIREBASE_PROJECT_ID is configured.'
+    );
+  }
+
+  return initializeApp({
     projectId: firebaseConfig.projectId,
   });
 }
 
-initAdminApp();
-
-export const adminAuth = getAuth();
+const adminApp = getOrInitAdminApp();
+export const adminAuth = getAuth(adminApp);
 
 export interface VerifiedFirebaseIdentity {
   uid: string;
@@ -77,6 +83,11 @@ export async function verifyFirebaseIdToken(idToken: string): Promise<VerifiedFi
     );
 
     if (!res.ok) {
+      const lookupErr = await res.json().catch(() => null);
+      const lookupMsg = lookupErr?.error?.message;
+      if (lookupMsg) {
+        throw new Error(`${msg || 'Firebase token verification failed'} (${lookupMsg})`);
+      }
       throw adminErr;
     }
 

@@ -224,6 +224,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const message = serverDetail
           ? serverDetail
           : `Google authentication synchronization failed (HTTP ${res.status}).`;
+        if (res.status === 401 || res.status === 403) {
+          await signOut(auth).catch(() => {});
+        }
         throw new Error(message);
       }
 
@@ -337,6 +340,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setMemoryAuthToken(data.token);
     setUser(data.user);
     setSchool(data.school);
+    if (data.user.preferredLang === 'en' || data.user.preferredLang === 'fr') {
+      setLangState(data.user.preferredLang);
+    }
     if (data.verificationCodePreview) {
       setVerificationCodePreview(data.verificationCodePreview);
     }

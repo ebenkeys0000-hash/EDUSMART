@@ -20,6 +20,7 @@ export const SchoolOnboarding: React.FC = () => {
   const [currency, setCurrency] = useState('XOF');
   const [academicSystem, setAcademicSystem] = useState('Francophone');
   const [subscriptionPlan, setSubscriptionPlan] = useState<SubscriptionPlanKey>('multi_niveaux');
+  const [billingCycle, setBillingCycle] = useState<'monthly' | 'annual'>('monthly');
   const [schoolCode, setSchoolCode] = useState('');
   const [loadSampleData, setLoadSampleData] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -28,27 +29,56 @@ export const SchoolOnboarding: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+
+    if (mode === 'create') {
+      if (name.trim().length < 2) {
+        setError(
+          lang === 'fr'
+            ? "Veuillez saisir le nom officiel de l'établissement (min. 2 caractères)."
+            : 'Please enter the official school name (min. 2 characters).'
+        );
+        return;
+      }
+      if (!city.trim()) {
+        setError(lang === 'fr' ? 'Veuillez saisir la ville.' : 'Please enter the city.');
+        return;
+      }
+    } else if (schoolCode.trim().length < 3) {
+      setError(
+        lang === 'fr'
+          ? "Veuillez saisir le code unique de l'établissement."
+          : 'Please enter the unique school code.'
+      );
+      return;
+    }
+
     setBusy(true);
     try {
       await apiRequest('/api/schools/setup', {
         method: 'POST',
         body: JSON.stringify({
           mode,
-          name,
+          name: name.trim(),
           country,
-          city,
-          address,
-          phone,
+          city: city.trim(),
+          address: address.trim(),
+          phone: phone.trim(),
           currency,
           academicSystem,
           subscriptionPlan,
-          schoolCode,
+          billingCycle,
+          schoolCode: schoolCode.trim().toUpperCase(),
           loadSampleData,
         }),
       });
       await refreshSession();
     } catch (err: any) {
-      setError(err.message || 'Impossible de configurer l’établissement.');
+      setError(
+        err?.message ||
+          (lang === 'fr'
+            ? 'Impossible de configurer l’établissement.'
+            : 'Failed to configure school profile.')
+      );
     } finally {
       setBusy(false);
     }
@@ -114,7 +144,10 @@ export const SchoolOnboarding: React.FC = () => {
         <div className="mt-6 grid grid-cols-2 gap-2 rounded-xl bg-slate-100 dark:bg-slate-800 p-1">
           <button
             type="button"
-            onClick={() => setMode('create')}
+            onClick={() => {
+              setMode('create');
+              setError(null);
+            }}
             className={`rounded-lg py-2 text-xs font-semibold cursor-pointer transition-colors ${
               mode === 'create'
                 ? 'bg-white dark:bg-slate-900 text-[#082F5E] dark:text-white shadow-xs'
@@ -125,7 +158,10 @@ export const SchoolOnboarding: React.FC = () => {
           </button>
           <button
             type="button"
-            onClick={() => setMode('join')}
+            onClick={() => {
+              setMode('join');
+              setError(null);
+            }}
             className={`rounded-lg py-2 text-xs font-semibold cursor-pointer transition-colors ${
               mode === 'join'
                 ? 'bg-white dark:bg-slate-900 text-[#082F5E] dark:text-white shadow-xs'
@@ -160,7 +196,7 @@ export const SchoolOnboarding: React.FC = () => {
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+        <form onSubmit={handleSubmit} noValidate className="mt-6 space-y-4">
           {mode === 'create' ? (
             <>
               <div>
@@ -169,7 +205,6 @@ export const SchoolOnboarding: React.FC = () => {
                 </label>
                 <input
                   type="text"
-                  required
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="Collège Privé Les Palmiers"
@@ -192,6 +227,7 @@ export const SchoolOnboarding: React.FC = () => {
                     <option value="Côte d'Ivoire">Côte d&apos;Ivoire</option>
                     <option value="Sénégal">Sénégal</option>
                     <option value="Cameroun">Cameroun</option>
+                    <option value="Gabon">Gabon</option>
                     <option value="International">International</option>
                   </select>
                 </div>
@@ -201,7 +237,6 @@ export const SchoolOnboarding: React.FC = () => {
                   </label>
                   <input
                     type="text"
-                    required
                     value={city}
                     onChange={(e) => setCity(e.target.value)}
                     className={inputBaseClass}
@@ -236,7 +271,7 @@ export const SchoolOnboarding: React.FC = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                     {lang === 'fr' ? 'Devise principale' : 'Primary Currency'}
@@ -282,6 +317,19 @@ export const SchoolOnboarding: React.FC = () => {
                     ))}
                   </select>
                 </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    {lang === 'fr' ? 'Rythme' : 'Billing Cycle'}
+                  </label>
+                  <select
+                    value={billingCycle}
+                    onChange={(e) => setBillingCycle(e.target.value as 'monthly' | 'annual')}
+                    className={inputBaseClass}
+                  >
+                    <option value="monthly">{lang === 'fr' ? 'Mensuel' : 'Monthly'}</option>
+                    <option value="annual">{lang === 'fr' ? 'Annuel (-20 %)' : 'Annual (-20%)'}</option>
+                  </select>
+                </div>
               </div>
 
               <label className="flex items-start gap-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 p-4 cursor-pointer">
@@ -312,7 +360,6 @@ export const SchoolOnboarding: React.FC = () => {
               </label>
               <input
                 type="text"
-                required
                 value={schoolCode}
                 onChange={(e) => setSchoolCode(e.target.value)}
                 placeholder="PALM-4821"
