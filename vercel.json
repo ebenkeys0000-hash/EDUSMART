@@ -30,7 +30,7 @@
       "destination": "/api/index"
     },
     {
-      "source": "/((?!api/|assets/|favicon).*)",
+      "source": "/((?!api(?:/|$)|assets/|favicon).*)",
       "destination": "/index.html"
     }
   ]

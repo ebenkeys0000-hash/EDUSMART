@@ -79,5 +79,11 @@ export function createApiApp() {
   app.use('/api/media', mediaRoutes);
   app.use('/api/id-cards', idCardsRoutes);
 
+  app.use('/api', (req, res) => {
+    res.status(404).json({
+      error: `API route not found: ${req.method} ${req.originalUrl || req.url}`,
+    });
+  });
+
   return app;
 }
